@@ -12,6 +12,8 @@
  */
 package org.web3j.sokt
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import com.github.zafarkhaja.semver.Version
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonConfiguration
@@ -24,6 +26,8 @@ import java.util.concurrent.TimeUnit
 import javax.net.ssl.HttpsURLConnection
 
 class VersionResolver(private val directoryPath: String = ".web3j") {
+
+    private val mapper = jacksonObjectMapper()
 
     operator fun get(uri: String): String {
         val con = URL(uri).openConnection() as HttpsURLConnection
@@ -45,13 +49,22 @@ class VersionResolver(private val directoryPath: String = ".web3j") {
         return response.toString()
     }
 
+    private fun parseSolcReleaseInfo(json: String) : List<SolcRelease> {
+        val releases: List<SolcReleaseInfo> = mapper.readValue(json)
+        val startsWithDigitRegex = Regex("^\\d")
+        return releases.map { it.toSolcRelease() }
+            .filter { startsWithDigitRegex.containsMatchIn(it.version) }
+            .sortedBy { it.version }
+    }
+
     fun getSolcReleases(): List<SolcRelease> {
         val versionsFile = Paths.get(System.getProperty("user.home"), directoryPath, "solc", "releases.json").toFile()
         try {
-            val result = get("https://raw.githubusercontent.com/web3j/web3j-sokt/master/src/main/resources/releases.json")
+            val releasesResponse = get("https://api.github.com/repos/ethereum/solidity/releases")
+            val parsedReleases = parseSolcReleaseInfo(releasesResponse)
             versionsFile.parentFile.mkdirs()
-            versionsFile.writeText(result)
-            return Json(JsonConfiguration.Stable).parse(SolcRelease.serializer().list, result)
+            versionsFile.writeText(mapper.writeValueAsString(parsedReleases))
+            return parsedReleases
         } catch (e: Exception) {
             return if (versionsFile.exists()) {
                 Json(JsonConfiguration.Stable).parse(SolcRelease.serializer().list, versionsFile.readText())
